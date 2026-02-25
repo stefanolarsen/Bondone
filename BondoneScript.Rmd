@@ -1,0 +1,28 @@
+---
+title: "Bondone_script"
+output: html_document
+date: "2026-02-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+install.packages('tidyverse')
+library(tidyverse)
+install.packages('phyloseq')
+
+```
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("phyloseq")
+
+
+```
+```{r}
+
+```
+
