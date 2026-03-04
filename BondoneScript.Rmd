@@ -24,6 +24,11 @@ library(ade4)
 
 ```
 
+```{r}
+theme_set(theme_bw())
+```
+
+
 #install phyloseq
 ```{r}
 if (!require("BiocManager", quietly = TRUE))
@@ -191,7 +196,7 @@ Bact_otu %>%
 names(sort_taxa_occur[sort_taxa_occur>3])
 
 # how many reads per OTU in the subsetted group?
-sort_taxa_abb_subs<-sort(rowSums(Bact_otu_subs)) # within the taxa occurring in >3 samples, the min read (abb) is 5
+sort_taxa_abb_subs<-sort(rowSums(Bact_otu_subs), decreasing = T) # within the taxa occurring in >3 samples, the min read (abb) is 5
 
 ```
 # Traspose subsetted OTU tab
@@ -261,6 +266,7 @@ plot(mantest.elev, alpha=.05)
 title('Correlogram Elevation')
 ```
 
+# Chunks of code to plot the pairwise phylo and niche differences - 
 # transform the elevation and phylo distance into 3cols matrices
 ```{r}
 elev_dist<-as.dist(niche.dif_subs$nd$altitude)
@@ -293,9 +299,162 @@ elev_dist_3col$pd_dist<-pd_dist_3col$dis[match(elev_dist_3col$pairs, pd_dist_3co
 ```
 
 # explore relation between raw distances (elev vs phylo)
+*strong relation for short-medium phylo distances.*
 ```{r}
 elev_dist_3col %>% 
   ggplot()+aes(pd_dist, dis)+geom_smooth()
+```
+
+
+
+################################
+# Further subset taxa (3000) towards the null models
+
+```{r}
+sort_taxa_abb_subs # this is the sorting of subsetted otu, based on total abb
+names(sort_taxa_abb_subs[1:100]) # names of the first 100 otus
+
+```
+# *subset the 3000 most abbund OTUs*
+```{r}
+Bact_otu_3k<-
+  Bact_otu_subs %>% 
+  filter(rownames(Bact_otu_subs) %in% names(sort_taxa_abb_subs[1:3000]))
+```
+# create the transpose version of the 3k otu df
+```{r}
+Bact_otu_3k_t<-as.data.frame(t(Bact_otu_3k))
+```
+
+# Create the Phyloseq file with the 3k otus
+*b_ps_3k*
+
+```{r}
+b_ps_3k<-prune_taxa(taxa_names(b_ps_subs) %in% names(Bact_otu_3k_t), b_ps_subs )
+b_ps_3k
+```
+# extract the phylo tree from the 3k otu phyloseq
+```{r}
+pd_3k<-cophenetic(phy_tree(b_ps_3k))
+```
+
+# *First test of null model (qpen)*
+10 randomization takes 3 minutes
+120 randomiz in 11 minuts
+```{r}
+b_qp_3k=qpen(comm= Bact_otu_3k_t, pd=pd_3k, 
+            tree=phy_tree(b_ps_3k),
+             rand.time=200, nworker=4)
+```
+
+# see results
+```{r}
+b_qp_3k$result
+```
+# add the info on site pairs (using both pair combinations; likely not needed)
+```{r}
+b_qp_3k$result$pair<-paste(b_qp_3k$result$sample1, b_qp_3k$result$sample2, sep=".")
+b_qp_3k$result$pair2<-paste(b_qp_3k$result$sample2, b_qp_3k$result$sample1, sep=".")
+
+```
+
+
+# calculate *elevation distance between samples*
+```{r}
+elev_dist_samples<-
+sample_tab %>% 
+  mutate(dummy=1) %>% 
+  select(altitude, dummy) %>% 
+vegdist( 'euclidean')
+```
+# transform elevation distance into 3col matrix
+```{r}
+elev_dist_samples.df<-dist.3col(elev_dist_samples)
+elev_dist_samples.df$pairs<-paste(elev_dist_samples.df$name1, elev_dist_samples.df$name2, sep=".")
+elev_dist_samples.df$pairs2<-paste(elev_dist_samples.df$name2, elev_dist_samples.df$name1, sep=".") # maybe not needed
+
+```
+
+# calculate *pH distance between samples*
+```{r}
+pH_dist_samples<-
+sample_tab %>% 
+  mutate(dummy=1) %>% 
+  select(pH, dummy) %>% 
+vegdist( 'euclidean')
+```
+# transform pH distance into 3col matrix
+```{r}
+pH_dist_samples.df<-dist.3col(pH_dist_samples)
+pH_dist_samples.df$pairs<-paste(pH_dist_samples.df$name1, pH_dist_samples.df$name2, sep=".")
+```
+
+
+
+# add the elevation distance to the null model results
+```{r}
+b_qp_3k$result$elev_dist<-elev_dist_samples.df$dis[match(b_qp_3k$result$pair, elev_dist_samples.df$pairs)]
+sum(is.na(b_qp_3k$result$elev_dist))
+```
+
+# work on a temporary df (from the sample pairs only) where I split the sample pairs into additional pairing information
+```{r}
+tmp<-b_qp_3k$result[,c(1,2)] # only use the sample pairs info
+
+#split the sample 1 (of the pair) into replicate, horizon, and A,B info
+tmp<- 
+tmp %>% 
+  separate_wider_delim(sample1, delim = '_', names=c('S1_repl', 'S1_horiz', "S1_AB"), too_few = 'align_start')
+
+#do as above for sample 2 (of the pair)
+tmp<-
+tmp %>% 
+  separate_wider_delim(sample2, delim = '_', names=c('S2_repl', 'S2_horiz', "S2_AB"), too_few = 'align_start')
+```
+
+# add horizon pair match on the tmp data
+```{r}
+# if same horizon, or different horizon
+tmp$horiz_pair<-
+ifelse(tmp$S1_horiz == tmp$S2_horiz, 'Same_horiz', 'diff_horiz')
+
+# add horizon type info (OR, MIN) for the same horizon pairs, otherwise write 'Mix horizon' (when not the same horizon between the pair of samples)
+tmp$horiz_type<-
+  ifelse(tmp$horiz_pair=='Same_horiz', tmp$S1_horiz, 'Mix_horiz')
+```
+
+# add the sample pairing information into the null model results
+*must rerun the null model. I have cancelled part of the results by doing this!*
+```{r}
+# use b_qp_3k$results!!
+b_qp_3k<-
+cbind(b_qp_3k$result, tmp)
+
+```
+
+*add the pH, but need to redo it properly once I run the null again*
+```{r}
+b_qp_3k$pH_dist<-pH_dist_samples.df$dis[match(b_qp_3k$pair, pH_dist_samples.df$pairs)]
+```
+
+
+
+```{r}
+b_qp_3k %>% 
+  filter(horiz_type != 'Mix_horiz') %>% 
+  ggplot()+aes(elev_dist, bNTI, col=horiz_type)+geom_smooth(method='lm')+geom_hline(yintercept = c(-2,2), col='black', linetype='dashed')+
+  geom_point()
+
+b_qp_3k %>% 
+  filter(horiz_type != 'Mix_horiz') %>% 
+  ggplot()+aes(elev_dist, bNTI, col=horiz_type)+geom_smooth(method='lm')+geom_hline(yintercept = c(-2,2), col='black', linetype='dashed')
+```
+
+
+```{r}
+b_qp_3k %>% 
+  filter(horiz_type != 'Mix_horiz') %>% 
+  ggplot()+aes(pH_dist, bNTI, col=horiz_type)+geom_smooth(method='lm')+geom_hline(yintercept = c(-2,2), col='black', linetype='dashed')
 ```
 
 
