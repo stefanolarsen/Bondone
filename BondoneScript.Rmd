@@ -7,22 +7,295 @@ date: "2026-02-25"
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
 ```{r}
 install.packages('tidyverse')
 library(tidyverse)
-install.packages('phyloseq')
+install.packages('phyloseq') #not working
+
+library(readr)
+
+install.packages('iCAMP')
+library(iCAMP)
+
+library(vegan)
+library(ade4)
+
 
 ```
 
+#install phyloseq
 ```{r}
 if (!require("BiocManager", quietly = TRUE))
     install.packages("BiocManager")
 
 BiocManager::install("phyloseq")
-
+library(phyloseq)
 
 ```
+
 ```{r}
+library(Biostrings)
+```
+
+####################
+# *Import the files*
+
+# import tree
+```{r}
+Bact_tree<-read_tree('16S/16s_bacterialtree.nwk')
+```
+# import fasta (this actually is not needed by phyloseq)
+```{r}
+Bact_fasta<-readDNAStringSet('16S/16s_bacteria_only.fasta')
+```
+
+# import OTU
+```{r}
+Bact_otu<-read.csv('16S/otu_table_bacteria.csv')
+
+rownames(Bact_otu)<-Bact_otu$SeqName # assign rownames
+Bact_otu$X<-NULL
+Bact_otu$SeqName<-NULL
+
+# remove the 'X' in front of sample names
+colnames(Bact_otu)<- gsub( 'X', '', colnames(Bact_otu) )
+```
+
+#import sample tab
+```{r}
+sample_tab<-read.csv('16S/sample_table.csv')
+
+rownames(sample_tab)<-sample_tab$uniqueID # assign rownames
+sample_tab$X<-NULL
+```
+
+#import tax table
+```{r}
+Bact_tax<-read.csv('16S/tax_table_bacteria.csv')
+
+rownames(Bact_tax)<-Bact_tax$SeqName # assign row names 
+Bact_tax<-Bact_tax[,-c(1,2)]
 
 ```
+
+# *import all into phyloseq*
+
+```{r}
+class(Bact_tax)
+Bact_tax<-as.matrix(Bact_tax) # convert to matrix
+```
+
+# create the needed dataframes for phyloseq
+```{r}
+b.OTU<-otu_table(Bact_otu, taxa_are_rows = T)
+b.TAX<-tax_table(Bact_tax)
+b.sample<-sample_data(sample_tab)
+
+```
+
+# create the phyloseq file *b_ps* - all OTUs for now (will subset later)
+```{r}
+b_ps<-phyloseq(b.OTU, b.TAX, b.sample, Bact_tree) # this includes all otus
+
+```
+
+# *examine the OTU tab - check abundance, occurrences, etc*
+# plot the abundance and occurrence (richness) profile of taxa per sample
+*discuss if rarefying to 12k reads is needed* - 
+```{r}
+sort.abb<-sort(colSums(Bact_otu), decreasing = T) # sort tot abundance per sample
+plot(sort.abb, type='l')
+
+sort.occ<-sort(colSums(vegan::decostand(Bact_otu, 'pa')), decreasing = T) # sort tot richness per sample
+plot(sort.occ, type='l')
+
+
+# many taxa found in only 1 sample
+sort_taxa_occur<-sort(rowSums(vegan::decostand(Bact_otu, 'pa'))) # sort tot occurrence per taxa (in how many samples does the taxa occur)
+plot(sort_taxa_occur, type='l')
+
+sum(sort_taxa_occur>1) # many with low occurrence
+
+
+sort_taxa_abb<-sort(rowSums(Bact_otu)) # sort tot abundance per taxa
+plot(sort_taxa_abb, type='l')
+
+sum(sort_taxa_abb>5)
+
+
+```
+
+
+# Working on the *niche differences between taxa*
+```{r}
+#traspose the Otu tab
+Bact_otu_t<-t(Bact_otu)
+Bact_otu_t<-as.data.frame(Bact_otu_t)
+```
+
+# niche difference between OTUs (all OTUs now) bases on elevation (needed for Mantel test, etc)
+```{r}
+niche.dif=iCAMP::dniche(env = sample_tab[,c(2,4,5,6)], 
+                        comm =Bact_otu_t,
+                        method = "niche.value",
+                        nworker = 4,out.dist=T, bigmemo=F,
+                        nd.wd="~/Documents/FEM_work/PNRR/Bondone")
+```
+
+# check the mean and variance of each taxa over the elevation gradient- elevetion niche (using all taxa)
+```{r}
+elev_niche=
+ade4::sco.distri(sample_tab[,2],
+           Bact_otu_t ,
+            labels = NULL)
+```
+
+```{r}
+class(Bact_tax)
+Bact_tax<-as.data.frame(Bact_tax)
+
+```
+
+# add phylum and Otu info on the elev_niche df
+```{r}
+elev_niche$Phylum= Bact_tax$Phylum[match(row.names(elev_niche), row.names(Bact_tax))]
+elev_niche$OTU= rownames(elev_niche)
+
+
+```
+
+
+# plot elevation niche using all taxa
+```{r fig.width=6, fig.height=9}
+ ggplot(data=elev_niche ,
+        aes(x=mean, y=reorder(OTU, mean), xmin=(mean-sqrt(var)), xmax=(mean+sqrt(var))))+xlab('Elevation')+ylab('Bacterial taxa')+
+    geom_point(data=elev_niche %>% select(mean, var, OTU), aes(x=mean, y=reorder(OTU, mean), xmin=(mean-sqrt(var)), xmax=(mean+sqrt(var))),   size=1, shape=21, col='grey60')+geom_errorbarh(size=0.3, col='grey60')+theme(axis.text.x = element_text(angle=45, vjust=0, hjust=0))+xlim(700, 1650)+
+
+theme_classic()+
+  
+    geom_point(aes(col=Phylum ))+
+ geom_errorbarh(aes(col=Phylum), size=0.3)+theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())+facet_wrap(~Phylum)+
+  theme(axis.text.x = element_text(angle=45, vjust=0, hjust=0), axis.title = element_text(size=15))+theme(legend.position = 'none')
+```
+
+#subsetting
+# *subset otu table excluding taxa present in only 3 sample*
+
+```{r}
+Bact_otu_subs<-
+Bact_otu %>% 
+  filter(rownames(Bact_otu) %in% names(sort_taxa_occur[sort_taxa_occur>3]) ) # filter using names from the df 'sort_taxa_occur'
+
+# these the names of taxa occurring in >3 sample
+names(sort_taxa_occur[sort_taxa_occur>3])
+
+# how many reads per OTU in the subsetted group?
+sort_taxa_abb_subs<-sort(rowSums(Bact_otu_subs)) # within the taxa occurring in >3 samples, the min read (abb) is 5
+
+```
+# Traspose subsetted OTU tab
+```{r}
+Bact_otu_subs_t<-as.data.frame(t(Bact_otu_subs))
+```
+
+
+
+
+# calculate niche elevation, using the subset of taxa
+```{r}
+elev_niche_subs=
+sco.distri(sample_tab[,2],
+           Bact_otu_subs_t ,
+            labels = NULL)
+```
+# add tax information
+```{r}
+elev_niche_subs$Phylum= Bact_tax$Phylum[match(row.names(elev_niche_subs), row.names(Bact_tax))]
+elev_niche_subs$OTU= rownames(elev_niche_subs)
+```
+
+# plot elevation niche with subset of taxa (c 11k otus)
+```{r fig.width=6.5, fig.height=9}
+ ggplot(data=elev_niche_subs ,
+        aes(x=mean, y=reorder(OTU, mean), xmin=(mean-sqrt(var)), xmax=(mean+sqrt(var))))+xlab('Elevation')+ylab('Bacterial taxa')+
+    geom_point(data=elev_niche_subs %>% select(mean, var, OTU), aes(x=mean, y=reorder(OTU, mean), xmin=(mean-sqrt(var)), xmax=(mean+sqrt(var))),   size=1, shape=21, col='grey60')+geom_errorbarh(size=0.3, col='grey60')+theme(axis.text.x = element_text(angle=45, vjust=0, hjust=0))+xlim(700, 1650)+
+
+theme_classic()+
+  
+    geom_point(aes(col=Phylum ))+
+ geom_errorbarh(aes(col=Phylum), size=0.3)+theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())+facet_wrap(~Phylum)+
+  theme(axis.text.x = element_text(angle=45, vjust=0, hjust=0), axis.title = element_text(size=15), strip.text = element_text(size=7))+theme(legend.position = 'none')
+```
+
+
+## *Update phyloseq objet, using subset of taxa*
+
+```{r}
+b_ps_subs<-prune_taxa(taxa_names(b_ps) %in% names(Bact_otu_subs_t), b_ps )
+```
+
+# calculate the *niche difference* using subsetted phyloseq (based on 6631 otu)
+```{r}
+niche.dif_subs=iCAMP::dniche(env = sample_tab[,c(2,4,5,6)], 
+                        comm =Bact_otu_subs_t,
+                        method = "niche.value",
+                        nworker = 4,out.dist=T, bigmemo=F,
+                        nd.wd="~/Documents/FEM_work/PNRR/Bondone")
+```
+
+# extract the phylogen distance *pd.subs*
+```{r}
+pd.subs=cophenetic(phy_tree(b_ps_subs))
+```
+
+# Plot the mantel correlogram for altitude
+*this takes about 10m*
+```{r}
+mantest.elev=
+mantel.correlog(as.dist(pd.subs),as.dist(niche.dif_subs$nd$altitude), nperm = 150 )
+```
+
+```{r}
+plot(mantest.elev, alpha=.05) 
+title('Correlogram Elevation')
+```
+
+# transform the elevation and phylo distance into 3cols matrices
+```{r}
+elev_dist<-as.dist(niche.dif_subs$nd$altitude)
+pd_dist<-as.dist(pd.subs)
+
+elev_dist_3col<-
+dist.3col(elev_dist)
+
+elev_d
+
+pd_dist_3col<-
+  dist.3col(pd_dist)
+
+
+
+```
+
+# add the otu-pairs to each df
+```{r}
+pd_dist_3col$pairs<-paste(pd_dist_3col$name1, pd_dist_3col$name2, sep='_')
+
+elev_dist_3col$pairs<-paste(elev_dist_3col$name1, elev_dist_3col$name2, sep='_')
+
+```
+
+# add the phylo distance into the elevation distance df (using the same otu pairs to guide the match)
+```{r}
+elev_dist_3col$pd_dist<-pd_dist_3col$dis[match(elev_dist_3col$pairs, pd_dist_3col$pairs )]
+
+```
+
+# explore relation between raw distances (elev vs phylo)
+```{r}
+elev_dist_3col %>% 
+  ggplot()+aes(pd_dist, dis)+geom_smooth()
+```
+
 
