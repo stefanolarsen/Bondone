@@ -21,6 +21,11 @@ library(iCAMP)
 library(vegan)
 library(ade4)
 
+install.packages('ecodist')
+library(ecodist)
+
+install.packages('gtools')
+library(gtools)
 
 ```
 
@@ -344,7 +349,7 @@ pd_3k<-cophenetic(phy_tree(b_ps_3k))
 ```{r}
 b_qp_3k=qpen(comm= Bact_otu_3k_t, pd=pd_3k, 
             tree=phy_tree(b_ps_3k),
-             rand.time=200, nworker=4)
+             rand.time=500, nworker=4)
 ```
 
 # see results
@@ -427,34 +432,534 @@ tmp$horiz_type<-
 *must rerun the null model. I have cancelled part of the results by doing this!*
 ```{r}
 # use b_qp_3k$results!!
-b_qp_3k<-
+b_qp_3k$result<-
 cbind(b_qp_3k$result, tmp)
 
 ```
 
 *add the pH, but need to redo it properly once I run the null again*
 ```{r}
-b_qp_3k$pH_dist<-pH_dist_samples.df$dis[match(b_qp_3k$pair, pH_dist_samples.df$pairs)]
+b_qp_3k$result$pH_dist<-pH_dist_samples.df$dis[match(b_qp_3k$result$pair, pH_dist_samples.df$pairs)]
 ```
 
 
 
 ```{r}
-b_qp_3k %>% 
+b_qp_3k$result %>% 
   filter(horiz_type != 'Mix_horiz') %>% 
   ggplot()+aes(elev_dist, bNTI, col=horiz_type)+geom_smooth(method='lm')+geom_hline(yintercept = c(-2,2), col='black', linetype='dashed')+
   geom_point()
 
-b_qp_3k %>% 
+b_qp_3k$result %>% 
   filter(horiz_type != 'Mix_horiz') %>% 
   ggplot()+aes(elev_dist, bNTI, col=horiz_type)+geom_smooth(method='lm')+geom_hline(yintercept = c(-2,2), col='black', linetype='dashed')
 ```
 
 
 ```{r}
-b_qp_3k %>% 
+b_qp_3k$result %>% 
   filter(horiz_type != 'Mix_horiz') %>% 
   ggplot()+aes(pH_dist, bNTI, col=horiz_type)+geom_smooth(method='lm')+geom_hline(yintercept = c(-2,2), col='black', linetype='dashed')
 ```
+
+
+
+
+# calculat just bNTI, as distamce (to be used in MRM)
+*combining all samples*
+```{r}
+b.bNTI.dist<-
+  bNTIn.p(comm=Bact_otu_3k_t, dis=pd_3k,rand=400, 
+          nworker=4, output.bMNTD = T)
+```
+
+# Multiple reg on distance matrices
+
+```{r}
+library(ecodist)
+install.packages('MDMR')
+library(MDMR)
+```
+
+# *multiuple distance matrix regression indicates that pH is the key driver of bNTI variation*
+# here combining all samples
+```{r}
+MRM(as.vector(as.dist(b.bNTI.dist$index)) ~ as.vector(elev_dist)) # R2=0.027; p=0.001
+MRM(as.vector(as.dist(b.bNTI.dist$index)) ~ as.vector(pH_dist_samples)) # R2=0.557; p=0.001
+
+MRM(as.vector(as.dist(b.bNTI.dist$index)) ~ as.vector(elev_dist)+ as.vector(pH_dist_samples)) # R2=0.559
+
+```
+
+# extract sample tab *covariates* for min and or layers
+```{r}
+sample_tab_MIN<-
+sample_tab %>% 
+  filter(horizon == 'MIN_A' | horizon =='MIN_B') 
+
+sample_tab_OR<-
+sample_tab %>% 
+  filter(horizon == 'OR') 
+
+```
+
+# extract the pH and elevation distance between samples, for MIN and OR separate
+```{r}
+
+#MIN
+pH_dist_samples_MIN<-
+sample_tab_MIN %>% 
+  mutate(dummy=1) %>% 
+  select(pH, dummy) %>% 
+vegdist( 'euclidean')
+
+
+elev_dist_samples_MIN<-
+sample_tab_MIN %>% 
+  mutate(dummy=1) %>% 
+  select(altitude, dummy) %>% 
+vegdist( 'euclidean')
+
+
+# OR
+pH_dist_samples_OR<-
+sample_tab_OR %>% 
+  mutate(dummy=1) %>% 
+  select(pH, dummy) %>% 
+vegdist( 'euclidean')
+
+
+elev_dist_samples_OR<-
+sample_tab_OR %>% 
+  mutate(dummy=1) %>% 
+  select(altitude, dummy) %>% 
+vegdist( 'euclidean')
+
+```
+
+
+# Subset the OTU 3k (trasposed) for each horizon (layer)
+```{r}
+Bact_otu_3k_t_MIN<-
+  Bact_otu_3k_t %>% 
+  filter(rownames(Bact_otu_3k_t) %in% rownames(sample_tab_MIN))
+           
+           
+           
+Bact_otu_3k_t_OR<-
+  Bact_otu_3k_t %>% 
+  filter(rownames(Bact_otu_3k_t) %in% rownames(sample_tab_OR))
+
+
+```
+
+
+# *Subset phyloseq for OR and MIN separately*
+To extract e.g. phylo distance for separate samples/taxa combination
+```{r}
+#phyloseq just for MIN
+b_ps_3k_MIN<-prune_samples(rownames(Bact_otu_3k_t_MIN), b_ps_3k) # subset samples
+b_ps_3k_MIN<- prune_taxa(taxa_sums(b_ps_3k_MIN)>0, b_ps_3k_MIN) # remove taxa that now have 0 abund
+
+
+#and for OR
+b_ps_3k_OR<-prune_samples(rownames(Bact_otu_3k_t_OR), b_ps_3k) # subset samples
+b_ps_3k_OR<- prune_taxa(taxa_sums(b_ps_3k_OR)>0, b_ps_3k_OR) # remove taxa that now have 0 abund
+```
+# extract the phylo distance for MIN and OR
+
+```{r}
+pd_3k_MIN<-cophenetic(phy_tree(b_ps_3k_MIN))
+
+pd_3k_OR<-cophenetic(phy_tree(b_ps_3k_OR))
+
+```
+
+# Calculate bNTI for MIN and OR separately
+#bNTI for MIN
+```{r}
+b.bNTI.dist_MIN<-
+  bNTIn.p(comm=Bact_otu_3k_t_MIN, dis=pd_3k_MIN,rand=400, 
+          nworker=4, output.bMNTD = T)
+```
+#bNTI for OR
+```{r}
+b.bNTI.dist_OR<-
+  bNTIn.p(comm=Bact_otu_3k_t_OR, dis=pd_3k_OR,rand=400, 
+          nworker=4, output.bMNTD = T)
+```
+
+
+# Run MRM (Multiple regression matrices) on MIN and OR separately
+#To check which driver is more influential towards bNTI for MIN and OR
+
+*we see again the pH is the main driver underpinning bNTI variation*
+*and that pH has stronger effect on MIN layers, rather than OR*
+```{r}
+#MRM on MIN
+MRM(as.vector(as.dist(b.bNTI.dist_MIN$index)) ~ as.vector(elev_dist_samples_MIN)) # R2=0.035; p=0.001
+MRM(as.vector(as.dist(b.bNTI.dist_MIN$index)) ~ as.vector(pH_dist_samples_MIN)) # R2=0.589; p=0.001
+
+MRM(as.vector(as.dist(b.bNTI.dist_MIN$index)) ~ as.vector(elev_dist_samples_MIN)+ as.vector(pH_dist_samples_MIN)) # R2=0.589; negligible effect of elevation 
+
+# MRM on OR
+MRM(as.vector(as.dist(b.bNTI.dist_OR$index)) ~ as.vector(elev_dist_samples_OR)) # R2=0.005, p=NS
+MRM(as.vector(as.dist(b.bNTI.dist_OR$index)) ~ as.vector(pH_dist_samples_OR)) # R2 = 0.26
+
+MRM(as.vector(as.dist(b.bNTI.dist_OR$index)) ~ as.vector(elev_dist_samples_OR)+ as.vector(pH_dist_samples_OR)) # R2=0.27
+```
+
+
+
+
+####### Plots of *processes* contribution over elevation / pH distances group #########
+################################################################################
+# create the quantile cut for elevation distance and pH distance on the null model results
+
+
+```{r}
+b_qp_3k$result$elev_dist_q<-
+  quantcut(b_qp_3k$result$elev_dist, 3)
+
+
+b_qp_3k$result$pH_dist_q<-
+  quantcut(b_qp_3k$result$pH_dist,3)
+```
+
+# mutate heterogen to variable in assembly processes
+```{r}
+b_qp_3k$result<-
+b_qp_3k$result %>% 
+ mutate(process= str_replace(process, "Heterogeneous", "Variable"))
+
+unique(b_qp_3k$result$process)
+```
+
+
+# Plot of processes over three quantiles of elevation diff (all layers combined)
+```{r}
+
+p1.elev<-
+b_qp_3k$result %>%  
+ filter(elev_dist_q =="[0,117]") %>% 
+  mutate(process=as.factor(process)) %>% 
+  #mutate(process= str_replace(process, "Heterogeneous", "Variable")) %>% 
+  mutate(process=factor(process, levels=c('Dispersal.Limitation', 'Variable.Selection','Homogeneous.Selection' , 'Homogenizing.Dispersal', 'Undominated'))) %>%
+  count(process) %>% 
+  mutate(pct=n/sum(n)) %>% 
+  ggplot+ aes(x='',y=pct, fill=process)+ geom_bar(stat='identity') +xlab('0-117 m')+ylab(NULL)+theme_bw()+
+  theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))+
+  scale_fill_manual(values=c("seagreen", "orange", "blueviolet", "firebrick3", "grey70"))
+
+
+p2.elev<-
+b_qp_3k$result %>%  
+ filter(elev_dist_q =="(117,316]") %>% 
+  mutate(process=as.factor(process)) %>% 
+  #mutate(process= str_replace(process, "Heterogeneous", "Variable")) %>% 
+  mutate(process=factor(process, levels=c('Dispersal.Limitation', 'Variable.Selection','Homogeneous.Selection' , 'Homogenizing.Dispersal', 'Undominated'))) %>%
+  count(process) %>% 
+  mutate(pct=n/sum(n)) %>% 
+  ggplot+ aes(x='',y=pct, fill=process)+ geom_bar(stat='identity') +xlab('117--316 m')+ylab(NULL)+theme_bw()+
+  theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))+
+  scale_fill_manual(values=c("seagreen", "orange", "blueviolet", "firebrick3", "grey70"))
+
+
+p3.elev<-
+b_qp_3k$result %>%  
+ filter(elev_dist_q =="(316,639]") %>% 
+  mutate(process=as.factor(process)) %>% 
+  #mutate(process= str_replace(process, "Heterogeneous", "Variable")) %>% 
+  mutate(process=factor(process, levels=c('Dispersal.Limitation', 'Variable.Selection','Homogeneous.Selection' , 'Homogenizing.Dispersal', 'Undominated'))) %>%
+  count(process) %>% 
+  mutate(pct=n/sum(n)) %>% 
+  ggplot+ aes(x='',y=pct, fill=process)+ geom_bar(stat='identity') +xlab('316-639 m')+ylab(NULL)+theme_bw()+
+  theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))+
+  scale_fill_manual(values=c("seagreen", "orange", "blueviolet", "firebrick3", "grey70"))
+
+
+```
+
+
+```{r}
+install.packages('ggpubr')
+library(ggpubr)
+library(grid)
+```
+
+# the combined plot of processes over elevation diff
+*for all samples across layers*
+```{r}
+process_elev_plot_ALL<-
+ggarrange(p1.elev, p2.elev, p3.elev,  ncol=3, nrow=1, common.legend = TRUE, legend="right")
+
+annotate_figure(process_elev_plot_ALL, top=text_grob('All layers          ', size=14) ,
+                bottom = textGrob("Pairwise elevation difference                   ", gp = gpar(cex = 1.3)))
+```
+
+# Plot of processes over pH differences (combingin all layers)
+```{r}
+p1.pH<-
+b_qp_3k$result %>%  
+ filter(pH_dist_q =="[0,0.51]") %>% 
+  mutate(process=as.factor(process)) %>% 
+  #mutate(process= str_replace(process, "Heterogeneous", "Variable")) %>% 
+  mutate(process=factor(process, levels=c('Dispersal.Limitation', 'Variable.Selection','Homogeneous.Selection' , 'Homogenizing.Dispersal', 'Undominated'))) %>%
+  count(process) %>% 
+  mutate(pct=n/sum(n)) %>% 
+  ggplot+ aes(x='',y=pct, fill=process)+ geom_bar(stat='identity') +xlab('0 - 0.51 pH')+ylab(NULL)+theme_bw()+
+  theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))+
+  scale_fill_manual(values=c("seagreen", "orange", "blueviolet", "firebrick3", "grey70"))
+
+
+p2.pH<-
+b_qp_3k$result %>%  
+     filter(pH_dist_q =="(0.51,1.45]") %>% 
+  mutate(process=as.factor(process)) %>% 
+  #mutate(process= str_replace(process, "Heterogeneous", "Variable")) %>% 
+  mutate(process=factor(process, levels=c('Dispersal.Limitation', 'Variable.Selection','Homogeneous.Selection' , 'Homogenizing.Dispersal', 'Undominated'))) %>%
+  count(process) %>% 
+  mutate(pct=n/sum(n)) %>% 
+  ggplot+ aes(x='',y=pct, fill=process)+ geom_bar(stat='identity') +xlab('0.51 - 1.45 pH')+ylab(NULL)+theme_bw()+
+  theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))+
+  scale_fill_manual(values=c("seagreen", "orange", "blueviolet", "firebrick3", "grey70"))
+
+
+p3.pH<-
+b_qp_3k$result %>%  
+ filter(pH_dist_q =="(1.45,2.89]") %>% 
+  mutate(process=as.factor(process)) %>% 
+  #mutate(process= str_replace(process, "Heterogeneous", "Variable")) %>% 
+  mutate(process=factor(process, levels=c('Dispersal.Limitation', 'Variable.Selection','Homogeneous.Selection' , 'Homogenizing.Dispersal', 'Undominated'))) %>%
+  count(process) %>% 
+  mutate(pct=n/sum(n)) %>% 
+  ggplot+ aes(x='',y=pct, fill=process)+ geom_bar(stat='identity') +xlab('1.45 - 2.89 pH')+ylab(NULL)+theme_bw()+
+  theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))+
+  scale_fill_manual(values=c("seagreen", "orange", "blueviolet", "firebrick3", "grey70"))
+```
+
+# combined plot of processes for min layer over pH
+#*clear deterministic selection over the pH gradient*
+
+```{r}
+process_pH_plot_ALL<-
+ggarrange(p1.pH, p2.pH, p3.pH,  ncol=3, nrow=1, common.legend = TRUE, legend="right")
+
+annotate_figure(process_pH_plot_ALL, top=text_grob('All layers          ', size=14) ,
+                bottom = textGrob("Pairwise pH difference                   ", gp = gpar(cex = 1.3)))
+```
+
+
+
+
+
+
+##############################################################
+# Plots of processes across pH quantiles, separated for layers
+
+# MIN layers processes plot
+```{r}
+p1.pH_MIN<-
+b_qp_3k$result %>%  
+  filter(horiz_type=='MIN') %>% 
+ filter(pH_dist_q =="[0,0.51]") %>% 
+  mutate(process=as.factor(process)) %>% 
+  #mutate(process= str_replace(process, "Heterogeneous", "Variable")) %>% 
+  mutate(process=factor(process, levels=c('Dispersal.Limitation', 'Variable.Selection','Homogeneous.Selection' , 'Homogenizing.Dispersal', 'Undominated'))) %>%
+  count(process) %>% 
+  mutate(pct=n/sum(n)) %>% 
+  ggplot+ aes(x='',y=pct, fill=process)+ geom_bar(stat='identity') +xlab('0 - 0.51 pH')+ylab(NULL)+theme_bw()+
+  theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))+
+  scale_fill_manual(values=c("seagreen", "orange", "blueviolet", "firebrick3", "grey70"))
+
+
+p2.pH_MIN<-
+b_qp_3k$result %>%  
+    filter(horiz_type=='MIN') %>% 
+ filter(pH_dist_q =="(0.51,1.45]") %>% 
+  mutate(process=as.factor(process)) %>% 
+  #mutate(process= str_replace(process, "Heterogeneous", "Variable")) %>% 
+  mutate(process=factor(process, levels=c('Dispersal.Limitation', 'Variable.Selection','Homogeneous.Selection' , 'Homogenizing.Dispersal', 'Undominated'))) %>%
+  count(process) %>% 
+  mutate(pct=n/sum(n)) %>% 
+  ggplot+ aes(x='',y=pct, fill=process)+ geom_bar(stat='identity') +xlab('0.51 - 1.45 pH')+ylab(NULL)+theme_bw()+
+  theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))+
+  scale_fill_manual(values=c("seagreen", "orange", "blueviolet", "firebrick3", "grey70"))
+
+
+p3.pH_MIN<-
+b_qp_3k$result %>%  
+    filter(horiz_type=='MIN') %>% 
+ filter(pH_dist_q =="(1.45,2.89]") %>% 
+  mutate(process=as.factor(process)) %>% 
+  #mutate(process= str_replace(process, "Heterogeneous", "Variable")) %>% 
+  mutate(process=factor(process, levels=c('Dispersal.Limitation', 'Variable.Selection','Homogeneous.Selection' , 'Homogenizing.Dispersal', 'Undominated'))) %>%
+  count(process) %>% 
+  mutate(pct=n/sum(n)) %>% 
+  ggplot+ aes(x='',y=pct, fill=process)+ geom_bar(stat='identity') +xlab('1.45 - 2.89 pH')+ylab(NULL)+theme_bw()+
+  theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))+
+  scale_fill_manual(values=c("seagreen", "orange", "blueviolet", "firebrick3", "grey70"))
+```
+
+# combined plot of processes for min layer over pH
+```{r}
+process_pH_plot_MIN<-
+ggarrange(p1.pH_MIN, p2.pH_MIN, p3.pH_MIN,  ncol=3, nrow=1, common.legend = TRUE, legend="right")
+
+annotate_figure(process_pH_plot_MIN, top=text_grob('Mineral layer          ', size=14) ,
+                bottom = textGrob("Pairwise pH difference                   ", gp = gpar(cex = 1.3)))
+```
+
+
+
+
+
+# ORlayers processes
+```{r}
+p1.pH_OR<-
+b_qp_3k$result %>%  
+  filter(horiz_type=='OR') %>% 
+ filter(pH_dist_q =="[0,0.51]") %>% 
+  mutate(process=as.factor(process)) %>% 
+  #mutate(process= str_replace(process, "Heterogeneous", "Variable")) %>% 
+  mutate(process=factor(process, levels=c('Dispersal.Limitation', 'Variable.Selection','Homogeneous.Selection' , 'Homogenizing.Dispersal', 'Undominated'))) %>%
+  count(process) %>% 
+  mutate(pct=n/sum(n)) %>% 
+  ggplot+ aes(x='',y=pct, fill=process)+ geom_bar(stat='identity') +xlab('0 - 0.51 pH')+ylab(NULL)+theme_bw()+
+  theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))+
+  scale_fill_manual(values=c("seagreen", "orange", "blueviolet", "firebrick3", "grey70"))
+
+
+p2.pH_OR<-
+b_qp_3k$result %>%  
+    filter(horiz_type=='OR') %>% 
+ filter(pH_dist_q =="(0.51,1.45]") %>% 
+  mutate(process=as.factor(process)) %>% 
+  #mutate(process= str_replace(process, "Heterogeneous", "Variable")) %>% 
+  mutate(process=factor(process, levels=c('Dispersal.Limitation', 'Variable.Selection','Homogeneous.Selection' , 'Homogenizing.Dispersal', 'Undominated'))) %>%
+  count(process) %>% 
+  mutate(pct=n/sum(n)) %>% 
+  ggplot+ aes(x='',y=pct, fill=process)+ geom_bar(stat='identity') +xlab('0.51 - 1.45 pH')+ylab(NULL)+theme_bw()+
+  theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))+
+  scale_fill_manual(values=c("seagreen", "orange", "blueviolet", "firebrick3", "grey70"))
+
+
+p3.pH_OR<-
+b_qp_3k$result %>%  
+    filter(horiz_type=='OR') %>% 
+ filter(pH_dist_q =="(1.45,2.89]") %>% 
+  mutate(process=as.factor(process)) %>% 
+  #mutate(process= str_replace(process, "Heterogeneous", "Variable")) %>% 
+  mutate(process=factor(process, levels=c('Dispersal.Limitation', 'Variable.Selection','Homogeneous.Selection' , 'Homogenizing.Dispersal', 'Undominated'))) %>%
+  count(process) %>% 
+  mutate(pct=n/sum(n)) %>% 
+  ggplot+ aes(x='',y=pct, fill=process)+ geom_bar(stat='identity') +xlab('1.45 - 2.89 pH')+ylab(NULL)+theme_bw()+
+  theme(axis.text.x = element_text(angle=45, vjust = 1, hjust = 1))+
+  scale_fill_manual(values=c("seagreen", "orange", "blueviolet", "firebrick3", "grey70"))
+```
+
+
+# the plot of processes for Organic layer
+*need to think how to interpret increasing disp. limitation over the pH gradient, just for OR layer*
+# *Eventually speak with James*
+```{r}
+process_pH_plot_OR<-
+ggarrange(p1.pH_OR, p2.pH_OR, p3.pH_OR,  ncol=3, nrow=1, common.legend = TRUE, legend="right")
+
+annotate_figure(process_pH_plot_OR, top=text_grob('Organic layer          ', size=14) ,
+                bottom = textGrob("Pairwise pH difference                   ", gp = gpar(cex = 1.3)))
+```
+
+
+
+##############
+# Add more pairing information, indicating the samples pairs coming from the same elevation step. 
+
+
+```{r}
+
+# this just takes the sample number and remove the 5 replicates, creating new column
+b_qp_3k$result<-
+b_qp_3k$result %>% 
+  mutate( S1 = str_sub(S1_repl, 1,1))
+
+b_qp_3k$result<-
+b_qp_3k$result %>% 
+  mutate( S2 = str_sub(S2_repl, 1,1))
+
+# indicate of samples belong to same or differe 'S' (sample location = elevation)
+b_qp_3k$result$S_match<-
+  ifelse(b_qp_3k$result$S1 == b_qp_3k$result$S2, 'Same_S', 'Diff_S')
+
+b_qp_3k$result$S_num<-
+  ifelse(b_qp_3k$result$S_match =='Same_S', b_qp_3k$result$S1, 'Mix_S')
+```
+
+# add Sample number (w/o replicate N, S, C, etc) to the sample table
+this is needed to add actual elevation info inot the null model results (only for the samples coming from same elevation)
+
+```{r}
+sample_tab<-
+sample_tab %>% 
+  mutate(S_num = str_sub(uniqueID, 1, 1))
+```
+
+# add actual elevation and other drivers to the null model res
+```{r}
+b_qp_3k$result$elevation<-
+  sample_tab$altitude[match(b_qp_3k$result$S_num, sample_tab$S_num)]
+
+b_qp_3k$result$pH<-
+  sample_tab$pH[match(b_qp_3k$result$S_num, sample_tab$S_num)]
+
+
+```
+
+
+# No apparent homogenization (bray curtis) among replicates across the elevation (or pH) gradient
+# however there is a sign of *weaker homogenising selection as pH increase (lower pH values act as filter)*
+```{r}
+b_qp_3k$result %>%
+  filter(S_match=='Same_S') %>% 
+  filter(horiz_pair=='Same_horiz') %>% 
+  ggplot()+aes(y=BC, x=as.factor(elevation), col= horiz_type)+geom_boxplot()+
+  ylab('BrayCurtis between replicates')
+
+b_qp_3k$result %>%
+  filter(S_match=='Same_S') %>% 
+  filter(horiz_pair=='Same_horiz') %>% 
+  ggplot()+aes(y=BC, x=as.factor(pH), col= horiz_type)+geom_boxplot()+
+  ylab('BrayCurtis between replicates')
+
+b_qp_3k$result %>%
+  filter(S_match=='Same_S') %>% 
+  filter(horiz_pair=='Same_horiz') %>% 
+  ggplot()+aes(y=bNTI, x=pH, col= horiz_type)+
+  #geom_smooth(aes(y=bNTI, x=pH))+
+  geom_boxplot(aes(y=bNTI, x=as.factor(pH))) +
+  ylab('BrayCurtis between replicates')+
+  geom_hline(yintercept = c(-2,2), col='black', linetype='dashed')
+  
+
+```
+# Boxplot and trends for within sample bNTI vs pH values
+# highlights prevalent homogenising selection with low pH values (acidic soil)
+```{r}
+b_qp_3k$result %>%
+  filter(S_match == 'Same_S', horiz_pair == 'Same_horiz') %>% 
+  ggplot(aes(x = pH, y = bNTI, color = horiz_type, fill = horiz_type)) +
+  # 1. Add the boxplots first (keeping x as numeric)
+  geom_boxplot(aes(group = interaction(pH, horiz_type)), 
+               alpha = 0.3, 
+               outlier.shape = NA) + 
+  # 2. Add the smooth line
+  geom_smooth(method = "loess", se = TRUE) +
+  # 3. Aesthetics
+  labs(y = "bNTI between replicates", 
+       x = "Soil pH") +
+  theme_bw()+
+  geom_hline(yintercept = c(-2,2), col='black', linetype='dashed')
+```
+
 
 
