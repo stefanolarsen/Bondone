@@ -239,6 +239,40 @@ theme_classic()+
 ```
 
 
+
+# *calculate niche pH*, using the subset of taxa
+```{r}
+pH_niche_subs=
+sco.distri(sample_tab[,4],
+           Bact_otu_subs_t ,
+            labels = NULL)
+```
+# add tax information
+```{r}
+pH_niche_subs$Phylum= Bact_tax$Phylum[match(row.names(pH_niche_subs), row.names(Bact_tax))]
+pH_niche_subs$OTU= rownames(pH_niche_subs)
+```
+
+# plot elevation niche with subset of taxa (c 11k otus)
+```{r fig.width=6.5, fig.height=9}
+ ggplot(data=pH_niche_subs ,
+        aes(x=mean, y=reorder(OTU, mean), xmin=(mean-sqrt(var)), xmax=(mean+sqrt(var))))+xlab('pH')+ylab('Bacterial taxa')+
+    geom_point(data=pH_niche_subs %>% select(mean, var, OTU), aes(x=mean, y=reorder(OTU, mean), xmin=(mean-sqrt(var)), xmax=(mean+sqrt(var))),   size=1, shape=21, col='grey60')+geom_errorbarh(size=0.3, col='grey60')+theme(axis.text.x = element_text(angle=45, vjust=0, hjust=0))+xlim(4, 8)+
+
+theme_classic()+
+  
+    geom_point(aes(col=Phylum ))+
+ geom_errorbarh(aes(col=Phylum), size=0.3)+theme(axis.text.y = element_blank(), axis.ticks.y = element_blank())+facet_wrap(~Phylum)+
+  theme(axis.text.x = element_text(angle=45, vjust=0, hjust=0), axis.title = element_text(size=15), strip.text = element_text(size=7))+theme(legend.position = 'none')
+```
+
+
+
+
+
+
+
+##############################################
 ## *Update phyloseq objet, using subset of taxa*
 
 ```{r}
@@ -459,7 +493,8 @@ b_qp_3k$result %>%
 ```{r}
 b_qp_3k$result %>% 
   filter(horiz_type != 'Mix_horiz') %>% 
-  ggplot()+aes(pH_dist, bNTI, col=horiz_type)+geom_smooth(method='lm')+geom_hline(yintercept = c(-2,2), col='black', linetype='dashed')
+  ggplot()+aes(pH_dist, bNTI, col=horiz_type)+geom_smooth(method='lm')+geom_hline(yintercept = c(-2,2), col='black', linetype='dashed')+
+  xlab('pH distance between samples')
 ```
 
 
@@ -597,16 +632,16 @@ b.bNTI.dist_OR<-
 *and that pH has stronger effect on MIN layers, rather than OR*
 ```{r}
 #MRM on MIN
-MRM(as.vector(as.dist(b.bNTI.dist_MIN$index)) ~ as.vector(elev_dist_samples_MIN)) # R2=0.035; p=0.001
-MRM(as.vector(as.dist(b.bNTI.dist_MIN$index)) ~ as.vector(pH_dist_samples_MIN)) # R2=0.589; p=0.001
+MRM(as.vector(as.dist(scale(b.bNTI.dist_MIN$index))) ~ scale(as.vector(elev_dist_samples_MIN))) # beta_elev=0.22; R2=0.044; p=0.001
+MRM(as.vector(as.dist(scale(b.bNTI.dist_MIN$index))) ~ scale(as.vector(pH_dist_samples_MIN))) # beta_pH=0.8; R2=0.59; p=0.001
 
-MRM(as.vector(as.dist(b.bNTI.dist_MIN$index)) ~ as.vector(elev_dist_samples_MIN)+ as.vector(pH_dist_samples_MIN)) # R2=0.589; negligible effect of elevation 
+MRM(as.vector(as.dist(scale(b.bNTI.dist_MIN$index))) ~ scale(as.vector(elev_dist_samples_MIN))+ scale(as.vector(pH_dist_samples_MIN))) # beta_elev=0.006; beta_ph=0.80; R2=0.59; negligible effect of elevation 
 
 # MRM on OR
-MRM(as.vector(as.dist(b.bNTI.dist_OR$index)) ~ as.vector(elev_dist_samples_OR)) # R2=0.005, p=NS
-MRM(as.vector(as.dist(b.bNTI.dist_OR$index)) ~ as.vector(pH_dist_samples_OR)) # R2 = 0.26
+MRM(as.vector(as.dist(scale(b.bNTI.dist_OR$index))) ~ scale(as.vector(elev_dist_samples_OR))) # beta_elev=0.11;  R2=0.14, p=0.019
+MRM(as.vector(as.dist(scale(b.bNTI.dist_OR$index))) ~ scale(as.vector(pH_dist_samples_OR))) # beta_pH=0.46; R2 = 0.21
 
-MRM(as.vector(as.dist(b.bNTI.dist_OR$index)) ~ as.vector(elev_dist_samples_OR)+ as.vector(pH_dist_samples_OR)) # R2=0.27
+MRM(as.vector(as.dist(scale(b.bNTI.dist_OR$index))) ~ scale(as.vector(elev_dist_samples_OR))+ scale(as.vector(pH_dist_samples_OR))) # beta_ph=0.47; beta_elev=-0.03; R2=0.21
 ```
 
 
@@ -953,7 +988,7 @@ b_qp_3k$result %>%
                alpha = 0.3, 
                outlier.shape = NA) + 
   # 2. Add the smooth line
-  geom_smooth(method = "loess", se = TRUE) +
+  geom_smooth(method = "lm", se = TRUE) +
   # 3. Aesthetics
   labs(y = "bNTI between replicates", 
        x = "Soil pH") +
@@ -961,5 +996,82 @@ b_qp_3k$result %>%
   geom_hline(yintercept = c(-2,2), col='black', linetype='dashed')
 ```
 
+```{r}
+b_qp_3k$result
+```
+
+
+
+
+# Calculate distances in cabon and nitrogen content among sites (all samples)
+
+```{r}
+TN_dist_samples<-
+sample_tab %>% 
+  mutate(dummy=1) %>% 
+  select(TN, dummy) %>% 
+vegdist( 'euclidean')
+```
+
+# TN distance for MIN layer
+```{r}
+TN_dist_samples_MIN<-
+sample_tab_MIN %>% 
+  mutate(dummy=1) %>% 
+  select(TN, dummy) %>% 
+vegdist( 'euclidean')
+```
+
+# TN distance for OR layer
+```{r}
+TN_dist_samples_OR<-
+sample_tab_OR %>% 
+  mutate(dummy=1) %>% 
+  select(TN, dummy) %>% 
+vegdist( 'euclidean')
+```
+
+
+
+
+# convert Nitrogen dist to 3column (all samples)
+```{r}
+TN_dist_3col <-
+  dist.3col(TN_dist_samples)
+
+TN_dist_3col$pair<-paste(TN_dist_3col$name1, TN_dist_3col$name2, sep=".")
+```
+
+# add the TN distance to the null model res
+```{r}
+b_qp_3k$result$TN_dist<-
+  TN_dist_3col$dis[match(b_qp_3k$result$pair, TN_dist_3col$pair)]
+```
+
+# plot bNTI vs TN distance
+*mirrors the results from pH*
+```{r}
+b_qp_3k$result %>% 
+  filter(horiz_type != 'Mix_horiz') %>% 
+  ggplot()+aes(TN_dist, bNTI, col=horiz_type)+geom_smooth(method='lm')+geom_hline(yintercept = c(-2,2), col='black', linetype='dashed')+
+  xlab('TN distance between samples')
+```
+
+
+# MRM on TN distance and pH dist
+*using scaled distances*
+```{r}
+#MRM on MIN
+MRM(as.vector(as.dist(scale(b.bNTI.dist_MIN$index))) ~ scale(as.vector(TN_dist_samples_MIN))) # beta=0.63 p=0.001; r2=0.36
+MRM(as.vector(as.dist(scale(b.bNTI.dist_MIN$index))) ~ scale(as.vector(pH_dist_samples_MIN))) # beta=0.8; R2=0.589; p=0.001
+
+MRM(as.vector(as.dist(scale(b.bNTI.dist_MIN$index))) ~ scale(as.vector(TN_dist_samples_MIN))+ scale(as.vector(pH_dist_samples_MIN))) # beta_ph=0.65; beta_TN=0.31; R2=0.66; 
+
+# MRM on OR
+MRM(as.vector(as.dist(scale(b.bNTI.dist_OR$index))) ~ scale(as.vector(TN_dist_samples_OR))) # beta_TN=0.39; R2=0.15, p=0.001
+MRM(as.vector(as.dist(scale(b.bNTI.dist_OR$index))) ~ scale(as.vector(pH_dist_samples_OR))) # Beta_pH=0.46 R2=0.2 
+
+MRM(as.vector(as.dist(scale(b.bNTI.dist_OR$index))) ~ scale(as.vector(TN_dist_samples_OR))+ scale(as.vector(pH_dist_samples_OR))) # beta_TN=0.31; beta_pH=0.40;  R2=0.3
+```
 
 
